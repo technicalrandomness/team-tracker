@@ -231,6 +231,11 @@
             box-shadow: 0 0 6px var(--success);
         }
 
+        .status-dot.inactive {
+            background: var(--text-muted);
+            box-shadow: none;
+        }
+
         .status-label {
             font-size: 12px;
             color: var(--text-secondary);
@@ -337,6 +342,10 @@
 
         .nav-btn:active {
             transform: scale(0.95);
+        }
+
+        .nav-btn.hidden {
+            display: none;
         }
 
         .form-group {
@@ -683,9 +692,62 @@
                 padding-top: calc(16px + env(safe-area-inset-top));
             }
         }
+
+        .admin-unlock {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 60px;
+            height: 60px;
+            z-index: 999;
+            cursor: pointer;
+            opacity: 0;
+        }
+
+        .user-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: rgba(16, 185, 129, 0.15);
+            border: 1px solid rgba(16, 185, 129, 0.25);
+            border-radius: 12px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: var(--success);
+        }
+
+        .user-badge button {
+            margin-left: auto;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+
+        .change-user-btn {
+            width: 100%;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            cursor: pointer;
+            margin-top: 12px;
+            transition: all 0.2s;
+        }
+
+        .change-user-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
     </style>
 </head>
 <body>
+    <div class="admin-unlock" onclick="unlockAdmin()" title="Admin access"></div>
+    
     <div class="offline-bar" id="offlineBar">
         Offline mode — Changes will sync when reconnected
     </div>
@@ -706,7 +768,7 @@
         <div class="refresh-indicator" id="refreshIndicator" style="display: none;">
             <span class="live-indicator">
                 <span class="live-dot"></span>
-                Live • Auto-refreshing
+                <span id="refreshText">Live • Auto-refreshing</span>
             </span>
         </div>
     </div>
@@ -719,7 +781,7 @@
             <button class="nav-btn" data-view="status" onclick="showView('status')">
                 My Status
             </button>
-            <button class="nav-btn" data-view="admin" onclick="showView('admin')">
+            <button class="nav-btn hidden" data-view="admin" id="adminBtn" onclick="showView('admin')">
                 Admin
             </button>
         </div>
@@ -727,7 +789,7 @@
 
     <script>
         const CONFIG = {
-            SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbz0S4iwbKwfTVrvxH9xzO04_gR4pAWRFOJT_H03o-cImjKqan7t6kvhCNHFinxhUvgLuw/exec',
+            SCRIPT_URL: 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec',
             REFRESH_INTERVAL: 20000,
             TIME_TOGGLE_INTERVAL: 3000
         };
@@ -740,10 +802,11 @@
         let timeToggleTimer = null;
         let lastRefresh = null;
         let selectedLocation = null;
+        let savedUserName = localStorage.getItem('teamTrackerUserName') || null;
+        let adminUnlocked = sessionStorage.getItem('adminUnlocked') === 'true';
         
         document.addEventListener('DOMContentLoaded', () => {
             loadData();
-            startAutoRefresh();
             startTimeToggle();
             
             window.addEventListener('online', () => {
@@ -754,6 +817,11 @@
             window.addEventListener('offline', () => {
                 document.getElementById('offlineBar').classList.add('show');
             });
+
+            // Check URL for admin access
+            if (window.location.hash === '#admin') {
+                unlockAdmin();
+            }
         });
         
         async function loadData() {
@@ -768,7 +836,14 @@
                         locations: data.config.locations || []
                     };
                     lastRefresh = new Date();
-                    document.getElementById('refreshIndicator').style.display = 'block';
+                    
+                    if (currentView === 'dashboard') {
+                        document.getElementById('refreshIndicator').style.display = 'block';
+                        document.getElementById('refreshText').textContent = 'Live • Auto-refreshing';
+                    } else {
+                        document.getElementById('refreshIndicator').style.display = 'none';
+                    }
+                    
                     render();
                 }
             } catch (error) {
@@ -858,6 +933,8 @@
             
             const html = sorted.map((member, index) => {
                 const isOnBreak = member.status === 'On Break';
+                const isNotSet = !member.status || member.status === 'Not set';
+                const isActive = !isOnBreak && !isNotSet;
                 const timeClass = getTimeClass(member.timestamp);
                 const timeDisplay = formatTime(member.timestamp);
                 const initial = member.name.charAt(0).toUpperCase();
@@ -870,14 +947,14 @@
                                 <div class="member-info">
                                     <div class="name">${escapeHtml(member.name)}</div>
                                     <div class="status-row">
-                                        <div class="status-dot"></div>
-                                        <span class="status-label">${isOnBreak ? 'On Break' : 'Active'}</span>
+                                        <div class="status-dot ${!isActive ? 'inactive' : ''}"></div>
+                                        <span class="status-label">${isOnBreak ? 'On Break' : isNotSet ? 'Not Set' : 'Active'}</span>
                                     </div>
                                 </div>
                             </div>
                         </div>
                         
-                        ${!isOnBreak ? `
+                        ${!isOnBreak && !isNotSet ? `
                             <div class="location-badge">${escapeHtml(member.status)}</div>
                         ` : ''}
                         
@@ -910,32 +987,28 @@
             const statusMap = {};
             teamData.forEach(m => statusMap[m.name] = m);
             
-            container.innerHTML = `
-                <div class="card form-card fade-in">
-                    <div class="form-group">
-                        <div class="form-label">Your Name</div>
-                        <div class="select-wrapper">
-                            <select id="nameSelect" onchange="onNameChange()">
-                                <option value="">Select...</option>
-                                ${configData.names.map(name => {
-                                    const current = statusMap[name];
-                                    const statusText = current ? ` — ${current.status}` : '';
-                                    return `<option value="${escapeHtml(name)}">${escapeHtml(name)}${statusText}</option>`;
-                                }).join('')}
-                            </select>
+            // If user already saved their name, show status form directly
+            if (savedUserName && configData.names.includes(savedUserName)) {
+                const current = statusMap[savedUserName] || {};
+                
+                container.innerHTML = `
+                    <div class="card form-card fade-in">
+                        <div class="user-badge">
+                            <span>Logged in as: <strong>${escapeHtml(savedUserName)}</strong></span>
+                            <button onclick="changeUser()">Change</button>
                         </div>
-                    </div>
-                    
-                    <div id="statusForm" style="display: none;">
+                        
                         <div class="form-group">
-                            <div class="form-label">Location</div>
+                            <div class="form-label">Current Location</div>
                             <div class="location-grid" id="locationGrid">
                                 ${configData.locations.map(loc => `
-                                    <button type="button" class="location-btn" data-loc="${escapeHtml(loc)}" onclick="selectLocation('${escapeHtml(loc)}')">
+                                    <button type="button" class="location-btn ${current.status === loc ? 'selected' : ''}" 
+                                            data-loc="${escapeHtml(loc)}" onclick="selectLocation('${escapeHtml(loc)}')">
                                         ${escapeHtml(loc)}
                                     </button>
                                 `).join('')}
-                                <button type="button" class="location-btn break-btn" data-loc="On Break" onclick="selectLocation('On Break')">
+                                <button type="button" class="location-btn break-btn ${current.status === 'On Break' ? 'selected' : ''}" 
+                                        data-loc="On Break" onclick="selectLocation('On Break')">
                                     On Break
                                 </button>
                             </div>
@@ -943,15 +1016,139 @@
                         
                         <div class="form-group">
                             <div class="form-label">Note (Optional)</div>
-                            <input type="text" id="noteInput" placeholder="Back in 10 min..." maxlength="100">
+                            <input type="text" id="noteInput" placeholder="Back in 10 min..." maxlength="100" 
+                                   value="${escapeHtml(current.note || '')}">
                         </div>
                         
-                        <button class="update-btn" onclick="submitStatus()" id="submitBtn">
+                        <button class="update-btn" onclick="submitStatusSaved()" id="submitBtn">
                             Update Status
                         </button>
                     </div>
-                </div>
-            `;
+                `;
+                
+                // Restore selected location
+                if (current.status) {
+                    selectedLocation = current.status;
+                }
+            } else {
+                // Show name selection first
+                container.innerHTML = `
+                    <div class="card form-card fade-in">
+                        <div class="form-group">
+                            <div class="form-label">Select Your Name</div>
+                            <div class="select-wrapper">
+                                <select id="nameSelect" onchange="saveUserAndShowStatus()">
+                                    <option value="">Choose...</option>
+                                    ${configData.names.map(name => {
+                                        const current = statusMap[name];
+                                        const statusText = current && current.status !== 'Not set' ? ` — ${current.status}` : '';
+                                        return `<option value="${escapeHtml(name)}">${escapeHtml(name)}${statusText}</option>`;
+                                    }).join('')}
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div id="statusFormSection" style="display: none; margin-top: 20px;">
+                            <div class="form-group">
+                                <div class="form-label">Current Location</div>
+                                <div class="location-grid" id="locationGrid">
+                                    ${configData.locations.map(loc => `
+                                        <button type="button" class="location-btn" data-loc="${escapeHtml(loc)}" 
+                                                onclick="selectLocation('${escapeHtml(loc)}')">
+                                            ${escapeHtml(loc)}
+                                        </button>
+                                    `).join('')}
+                                    <button type="button" class="location-btn break-btn" data-loc="On Break" 
+                                            onclick="selectLocation('On Break')">
+                                        On Break
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <div class="form-label">Note (Optional)</div>
+                                <input type="text" id="noteInput" placeholder="Back in 10 min..." maxlength="100">
+                            </div>
+                            
+                            <button class="update-btn" onclick="submitStatusNew()" id="submitBtn">
+                                Save & Update Status
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        
+        function saveUserAndShowStatus() {
+            const nameSelect = document.getElementById('nameSelect');
+            const name = nameSelect.value;
+            
+            if (!name) {
+                document.getElementById('statusFormSection').style.display = 'none';
+                return;
+            }
+            
+            savedUserName = name;
+            localStorage.setItem('teamTrackerUserName', name);
+            
+            // Re-render to show the saved user view
+            render();
+        }
+        
+        function changeUser() {
+            savedUserName = null;
+            localStorage.removeItem('teamTrackerUserName');
+            render();
+        }
+        
+        async function submitStatusSaved() {
+            if (!selectedLocation) {
+                alert('Please select a location');
+                return;
+            }
+            
+            const note = document.getElementById('noteInput').value;
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true;
+            btn.textContent = 'Updating...';
+            
+            await updateStatus(savedUserName, selectedLocation, note);
+            
+            btn.disabled = false;
+            btn.textContent = 'Update Status';
+        }
+        
+        async function submitStatusNew() {
+            const name = document.getElementById('nameSelect').value;
+            const note = document.getElementById('noteInput').value;
+            
+            if (!name) {
+                alert('Please select your name');
+                return;
+            }
+            
+            if (!selectedLocation) {
+                alert('Please select a location');
+                return;
+            }
+            
+            // Save the name for future visits
+            savedUserName = name;
+            localStorage.setItem('teamTrackerUserName', name);
+            
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+            
+            const success = await updateStatus(name, selectedLocation, note);
+            
+            if (success) {
+                // Re-render to show the compact view
+                render();
+            } else {
+                btn.disabled = false;
+                btn.textContent = 'Save & Update Status';
+            }
         }
         
         function renderAdmin(container) {
@@ -993,11 +1190,38 @@
                         Changes save automatically. Team members see updates immediately.
                     </div>
                 </div>
+                
+                <button class="change-user-btn" onclick="lockAdmin()">
+                    Hide Admin Tab
+                </button>
             `;
+        }
+        
+        function unlockAdmin() {
+            adminUnlocked = true;
+            sessionStorage.setItem('adminUnlocked', 'true');
+            document.getElementById('adminBtn').classList.remove('hidden');
+            alert('Admin access unlocked');
+        }
+        
+        function lockAdmin() {
+            adminUnlocked = false;
+            sessionStorage.removeItem('adminUnlocked');
+            document.getElementById('adminBtn').classList.add('hidden');
+            showView('dashboard');
         }
         
         function showView(view) {
             currentView = view;
+            
+            // Stop auto-refresh when not on dashboard
+            if (view === 'dashboard') {
+                startAutoRefresh();
+                document.getElementById('refreshIndicator').style.display = 'block';
+            } else {
+                stopAutoRefresh();
+                document.getElementById('refreshIndicator').style.display = 'none';
+            }
             
             document.querySelectorAll('.nav-btn').forEach(btn => {
                 btn.classList.remove('active');
@@ -1009,57 +1233,11 @@
             render();
         }
         
-        function onNameChange() {
-            const name = document.getElementById('nameSelect').value;
-            const form = document.getElementById('statusForm');
-            
-            if (!name) {
-                form.style.display = 'none';
-                return;
-            }
-            
-            form.style.display = 'block';
-            
-            const current = teamData.find(m => m.name === name);
-            if (current) {
-                selectLocation(current.status);
-                document.getElementById('noteInput').value = current.note || '';
-            } else {
-                document.querySelectorAll('.location-btn').forEach(btn => btn.classList.remove('selected'));
-                document.getElementById('noteInput').value = '';
-                selectedLocation = null;
-            }
-        }
-        
         function selectLocation(loc) {
             selectedLocation = loc;
             document.querySelectorAll('.location-btn').forEach(btn => {
                 btn.classList.toggle('selected', btn.dataset.loc === loc);
             });
-        }
-        
-        async function submitStatus() {
-            const name = document.getElementById('nameSelect').value;
-            const note = document.getElementById('noteInput').value;
-            
-            if (!name) {
-                alert('Please select your name');
-                return;
-            }
-            
-            if (!selectedLocation) {
-                alert('Please select a location');
-                return;
-            }
-            
-            const btn = document.getElementById('submitBtn');
-            btn.disabled = true;
-            btn.textContent = 'Updating...';
-            
-            const success = await updateStatus(name, selectedLocation, note);
-            
-            btn.disabled = false;
-            btn.textContent = 'Update Status';
         }
         
         async function addItem(type) {
@@ -1127,16 +1305,31 @@
         }
         
         function startAutoRefresh() {
-            refreshTimer = setInterval(loadData, CONFIG.REFRESH_INTERVAL);
+            if (!refreshTimer) {
+                refreshTimer = setInterval(loadData, CONFIG.REFRESH_INTERVAL);
+            }
+        }
+        
+        function stopAutoRefresh() {
+            if (refreshTimer) {
+                clearInterval(refreshTimer);
+                refreshTimer = null;
+            }
         }
         
         function startTimeToggle() {
             timeToggleTimer = setInterval(() => {
                 timeFormatAbsolute = !timeFormatAbsolute;
                 document.querySelectorAll('.time-display[data-timestamp]').forEach(el => {
-                    el.querySelector('span').textContent = formatTime(el.dataset.timestamp);
+                    const span = el.querySelector('span');
+                    if (span) span.textContent = formatTime(el.dataset.timestamp);
                 });
             }, CONFIG.TIME_TOGGLE_INTERVAL);
+        }
+        
+        // Initialize admin button state
+        if (adminUnlocked) {
+            document.getElementById('adminBtn').classList.remove('hidden');
         }
     </script>
 </body>
